@@ -12,6 +12,9 @@ from utils.inference_process import ToTensor, Normalize
 from tqdm import tqdm
 import argparse
 
+from pathlib import Path
+import pandas as pd
+
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -64,7 +67,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--ckpt_path', type=str)
+    # directory
     parser.add_argument('--img_path', type=str)
+    parser.add_argument('--output', type=str)
 
     args = parser.parse_args()
 
@@ -82,9 +87,6 @@ if __name__ == '__main__':
 
     # config file
     config = Config({
-        # image path
-        "image_path": args.img_path, # "./test_images/bad_quality.jpg",
-
         # valid times
         "num_crops": 20,
 
@@ -99,15 +101,7 @@ if __name__ == '__main__':
         "num_outputs": 1,
         "num_tab": 2,
         "scale": 0.8,
-
-        # checkpoint path
-        "ckpt_path": args.ckpt_path, # "./checkpoints/ckpt_koniq10k.pt",
     })
-    
-    # data load
-    Img = Image(image_path=config.image_path,
-        transform=transforms.Compose([Normalize(0.5, 0.5), ToTensor()]),
-        num_crops=config.num_crops)
     
     # model defination
     net = MANIQA(embed_dim=config.embed_dim, num_outputs=config.num_outputs, dim_mlp=config.dim_mlp,
@@ -115,19 +109,41 @@ if __name__ == '__main__':
         depths=config.depths, num_heads=config.num_heads, num_tab=config.num_tab, scale=config.scale,
         device=device)
 
-    net.load_state_dict(torch.load(config.ckpt_path, map_location=device), strict=False)
+    net.load_state_dict(torch.load(args.ckpt_path, map_location=device), strict=False)
     net = net.to(device)
 
-    avg_score = 0
-    for i in tqdm(range(config.num_crops)):
-        with torch.no_grad():
-            net.eval()
-            patch_sample = Img.get_patch(i)
-            patch = patch_sample['d_img_org'].to(device)
-            patch = patch.unsqueeze(0)
-            score = net(patch)
-            avg_score += score
-        
-    print("Image {} score: {}".format(Img.img_name, avg_score / config.num_crops))
+    output_dir = Path(args.output)
+    output_dir.mkdir(exist_ok=True)
+
+    results_df = pd.DataFrame(columns=['img_stem', 'score'])
+
+    for p in Path(args.img_path).glob('*'):
+        # data load
+        Img = Image(image_path=str(p),
+            transform=transforms.Compose([Normalize(0.5, 0.5), ToTensor()]),
+            num_crops=config.num_crops)
+
+        avg_score = 0
+        for i in tqdm(range(config.num_crops)):
+            with torch.no_grad():
+                net.eval()
+                patch_sample = Img.get_patch(i)
+                patch = patch_sample['d_img_org'].to(device)
+                patch = patch.unsqueeze(0)
+                score = net(patch)
+                avg_score += score
+
+        avg_score = avg_score / config.num_crops
+
+        sample_dict = {
+            'img_stem': p.stem,
+            'score': avg_score.cpu().numpy()[0]
+        }
+
+        results_df.loc[len(results_df)] = pd.Series(sample_dict)
+    
+    results_df.to_csv(f'{args.output}/maniqa.csv', index=False)
+
+    
 
     
