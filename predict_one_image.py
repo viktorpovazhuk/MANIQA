@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from config import Config
 from utils.inference_process import ToTensor, Normalize
 from tqdm import tqdm
+import argparse
 
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -60,7 +61,16 @@ class Image(torch.utils.data.Dataset):
 
 
 if __name__ == '__main__':
-    cpu_num = 1
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--ckpt_path', type=str)
+    parser.add_argument('--img_path', type=str)
+
+    args = parser.parse_args()
+
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+    cpu_num = 3
     os.environ['OMP_NUM_THREADS'] = str(cpu_num)
     os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_num)
     os.environ['MKL_NUM_THREADS'] = str(cpu_num)
@@ -73,7 +83,7 @@ if __name__ == '__main__':
     # config file
     config = Config({
         # image path
-        "image_path": "./test_images/kunkun.png",
+        "image_path": args.img_path, # "./test_images/bad_quality.jpg",
 
         # valid times
         "num_crops": 20,
@@ -91,7 +101,7 @@ if __name__ == '__main__':
         "scale": 0.8,
 
         # checkpoint path
-        "ckpt_path": "./ckpt_koniq10k.pt",
+        "ckpt_path": args.ckpt_path, # "./checkpoints/ckpt_koniq10k.pt",
     })
     
     # data load
@@ -102,17 +112,18 @@ if __name__ == '__main__':
     # model defination
     net = MANIQA(embed_dim=config.embed_dim, num_outputs=config.num_outputs, dim_mlp=config.dim_mlp,
         patch_size=config.patch_size, img_size=config.img_size, window_size=config.window_size,
-        depths=config.depths, num_heads=config.num_heads, num_tab=config.num_tab, scale=config.scale)
+        depths=config.depths, num_heads=config.num_heads, num_tab=config.num_tab, scale=config.scale,
+        device=device)
 
-    net.load_state_dict(torch.load(config.ckpt_path), strict=False)
-    net = net.cuda()
+    net.load_state_dict(torch.load(config.ckpt_path, map_location=device), strict=False)
+    net = net.to(device)
 
     avg_score = 0
     for i in tqdm(range(config.num_crops)):
         with torch.no_grad():
             net.eval()
             patch_sample = Img.get_patch(i)
-            patch = patch_sample['d_img_org'].cuda()
+            patch = patch_sample['d_img_org'].to(device)
             patch = patch.unsqueeze(0)
             score = net(patch)
             avg_score += score
